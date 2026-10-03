@@ -121,8 +121,4 @@ To reset the demo data, delete `reports.json` and the `uploads/` folder.
 
 ## Author
 
-[Your Name], [Your College / Course]
-
-## License
-
-Choose a license (for example MIT) and add a `LICENSE` file, or remove this section.
+[Mayank Rathi]
