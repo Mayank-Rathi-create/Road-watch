@@ -216,7 +216,7 @@ ss.setdefault("addr_msg", None)
 
 reports = load_reports()
 
-st.title("Civic**Connect**")
+st.title("Civic** **Connect**")
 tab_report, tab_map, tab_track = st.tabs(["Report", "Map", "Track"])
 
 
