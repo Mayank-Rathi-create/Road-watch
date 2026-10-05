@@ -1,18 +1,25 @@
 """
-RoadWatch - pothole reporting app (Streamlit)
+Civic Connect - report municipal problems (Streamlit)
+
+Citizens can report potholes, garbage, broken streetlights, drainage problems and
+other civic issues. Each report gets a reference number and a target resolution time.
 
 Install:  pip install streamlit streamlit-folium folium pillow geopy streamlit-geolocation
-Run:      streamlit run roadwatch_app.py
+Run:      streamlit run civic_connect_app.py
 
 Reports are saved locally in reports.json and photos in the uploads/ folder.
 There is no real municipal backend: "sending" opens your email app with the
 complaint pre-filled for the authority email you enter.
+
+IMPORTANT: the resolution times in CATEGORIES below are placeholder targets chosen
+for this demo. Replace them with the official service-level timelines of your
+municipality before presenting them to users as real commitments.
 """
 import json
 import math
 import random
 import urllib.parse
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from pathlib import Path
 
 import folium
@@ -32,7 +39,22 @@ CENTER = [12.9716, 77.5946]  # Bengaluru
 DUP_RADIUS_M = 20
 MAX_MB = 10
 
-st.set_page_config(page_title="RoadWatch", page_icon="🕳️", layout="centered")
+# Problem type -> target days to resolve a "Medium" severity report (EDIT THESE).
+CATEGORIES = {
+    "Pothole / road damage": 7,
+    "Garbage / waste collection": 3,
+    "Streetlight not working": 5,
+    "Drainage / sewage blockage": 5,
+    "Water supply / leakage": 3,
+    "Fallen tree / branch": 2,
+    "Footpath / public property damage": 14,
+    "Other municipal issue": 14,
+}
+# Severity changes the target: dangerous problems get a shorter target.
+SEV_FACTOR = {"Small": 1.5, "Medium": 1.0, "Dangerous": 0.5}
+LEGACY_CATEGORY = "Pothole / road damage"  # reports saved before categories existed
+
+st.set_page_config(page_title="Civic connect", page_icon="🏙️", layout="centered")
 
 
 # ---------- storage ----------
@@ -50,7 +72,7 @@ def save_reports(reports):
 def new_ref(reports):
     used = {r["ref"] for r in reports}
     while True:
-        ref = f"RW-{date.today().year}-{random.randint(100000, 999999)}"
+        ref = f"CC-{date.today().year}-{random.randint(100000, 999999)}"
         if ref not in used:
             return ref
 
@@ -74,9 +96,15 @@ def distance_m(lat1, lng1, lat2, lng2):
     return math.hypot(x, y) * r
 
 
-def find_duplicate(reports, lat, lng):
+def cat_of(rep):
+    return rep.get("category", LEGACY_CATEGORY)
+
+
+def find_duplicate(reports, lat, lng, category):
+    """An open report of the same type within DUP_RADIUS_M metres."""
     for r in reports:
-        if r["status"] < 4 and distance_m(lat, lng, r["lat"], r["lng"]) < DUP_RADIUS_M:
+        if (r["status"] < 4 and cat_of(r) == category
+                and distance_m(lat, lng, r["lat"], r["lng"]) < DUP_RADIUS_M):
             return r
     return None
 
@@ -85,9 +113,57 @@ def status_color(status):
     return "green" if status >= 4 else "orange" if status >= 1 else "red"
 
 
+# ----- target resolution time -----
+def target_days(category, severity):
+    base = CATEGORIES.get(category, CATEGORIES["Other municipal issue"])
+    return max(1, math.ceil(base * SEV_FACTOR.get(severity, 1.0)))
+
+
+def human_days(n):
+    if n <= 14:
+        return f"{n} day{'s' if n != 1 else ''}"
+    return f"about {round(n / 7)} weeks"
+
+
+def due_date(rep):
+    if "due" in rep:
+        return date.fromisoformat(rep["due"])
+    try:
+        created = datetime.fromisoformat(rep["created"]).date()
+    except (KeyError, ValueError):
+        created = date.today()
+    return created + timedelta(days=target_days(cat_of(rep), rep.get("severity", "Medium")))
+
+
+def days_left(rep):
+    return (due_date(rep) - date.today()).days
+
+
+def is_overdue(rep):
+    return rep["status"] < 4 and days_left(rep) < 0
+
+
+def deadline_text(rep):
+    if rep["status"] >= 4:
+        return "Resolved"
+    d = days_left(rep)
+    if d > 1:
+        return f"{d} days left"
+    if d == 1:
+        return "1 day left"
+    if d == 0:
+        return "due today"
+    return f"overdue by {-d} day{'s' if d != -1 else ''}"
+
+
+def fmt_date(d):
+    return d.strftime("%d %b %Y")
+
+
 def mailto_link(r, to):
     body = (
-        f"Pothole complaint {r['ref']}\n"
+        f"Complaint {r['ref']}\n"
+        f"Problem type: {cat_of(r)}\n"
         f"Location: {r['address'] or '(see coordinates)'}\n"
         f"Coordinates: {r['lat']:.5f}, {r['lng']:.5f}\n"
         f"Observed: {r['when']}\n"
@@ -98,7 +174,7 @@ def mailto_link(r, to):
     )
     return (
         f"mailto:{urllib.parse.quote(to)}"
-        f"?subject={urllib.parse.quote('Pothole complaint ' + r['ref'])}"
+        f"?subject={urllib.parse.quote(cat_of(r) + ' - complaint ' + r['ref'])}"
         f"&body={urllib.parse.quote(body)}"
     )
 
@@ -106,7 +182,7 @@ def mailto_link(r, to):
 @st.cache_data(show_spinner=False, ttl=3600)
 def _reverse(lat, lng):
     # Exceptions are not cached by Streamlit, so a failed lookup is retried next time.
-    geo = Nominatim(user_agent="roadwatch-demo", timeout=8)
+    geo = Nominatim(user_agent="civic_connect-demo", timeout=8)
     loc = geo.reverse((round(lat, 5), round(lng, 5)), language="en")
     return loc.address if loc else ""
 
@@ -140,7 +216,7 @@ ss.setdefault("addr_msg", None)
 
 reports = load_reports()
 
-st.title("Road**Watch**")
+st.title("Civic**Connect**")
 tab_report, tab_map, tab_track = st.tabs(["Report", "Map", "Track"])
 
 
@@ -149,12 +225,17 @@ with tab_report:
     if ss.last:
         r, to = ss.last
         st.success(f"Report submitted. Your reference number is **{r['ref']}**. Save it to track progress.")
+        st.info(
+            f"Expected resolution: within **{human_days(r['target_days'])}** "
+            f"(target date {fmt_date(due_date(r))}). This is a target for this type of problem, "
+            "not a guarantee."
+        )
         if to:
             st.markdown(f"[Email complaint to authority]({mailto_link(r, to)})")
             st.caption("Your email app opens with the details filled in. Attach the photo before sending.")
         else:
             st.info("No authority email was entered, so nothing has been sent.")
-        if st.button("Report another pothole"):
+        if st.button("Report another problem."):
             ss.last = None
             ss.pin = None
             ss.addr_msg = None
@@ -162,16 +243,18 @@ with tab_report:
             st.rerun()
     else:
         fid = ss.form_id
-        st.subheader("Report a pothole")
-        st.caption("Photo, location and time. About a minute.")
+        st.subheader("Report a problem")
+        st.caption("Potholes, garbage, streetlights, drainage and other civic issues. About a minute.")
+
+        category = st.selectbox("1. What is the problem?", list(CATEGORIES), key=f"cat{fid}")
 
         photo = st.file_uploader(
-            "1. Photo", type=["jpg", "jpeg", "png", "webp"], key=f"photo{fid}"
+            "2. Photo", type=["jpg", "jpeg", "png", "webp"], key=f"photo{fid}"
         )
         if photo:
             st.image(photo, width=260)
 
-        st.markdown("**2. Location**")
+        st.markdown("**3. Location**")
         st.caption("Tap the target icon to use your current location. Your browser will ask for permission.")
         gps = streamlit_geolocation()
         g_lat, g_lng = gps.get("latitude"), gps.get("longitude")
@@ -224,13 +307,13 @@ with tab_report:
             ss.pin = [lat_in, lng_in]
             st.rerun()
 
-        # duplicate check
+        # duplicate check (same problem type, within DUP_RADIUS_M)
         if ss.pin:
-            dup = find_duplicate(reports, *ss.pin)
+            dup = find_duplicate(reports, *ss.pin, category)
             if dup:
                 st.warning(
-                    f"A report **{dup['ref']}** already exists within {DUP_RADIUS_M} m "
-                    f"({dup.get('votes', 0)} upvotes)."
+                    f"A similar report **{dup['ref']}** ({cat_of(dup)}) already exists within "
+                    f"{DUP_RADIUS_M} m ({dup.get('votes', 0)} upvotes)."
                 )
                 if st.button("Upvote it instead"):
                     for rep in reports:
@@ -239,13 +322,20 @@ with tab_report:
                     save_reports(reports)
                     st.success("Thanks, your upvote was added.")
 
-        st.markdown("**3. Date and time**")
+        st.markdown("**4. Date and time**")
         d1, d2, d3 = st.columns([2, 2, 2])
         today = date.today()
         when_date = d1.date_input("Date", value=today, max_value=today, key=f"date{fid}")
         when_time = d2.time_input("Time", value=datetime.now().time().replace(second=0, microsecond=0),
                                   key=f"time{fid}")
         severity = d3.selectbox("Severity", ["Small", "Medium", "Dangerous"], index=1, key=f"sev{fid}")
+
+        est = target_days(category, severity)
+        st.info(
+            f"Expected resolution for this problem: within **{human_days(est)}** "
+            f"(target date {fmt_date(today + timedelta(days=est))}). "
+            "This is a target, not a guarantee."
+        )
 
         notes = st.text_area("Notes (optional)", key=f"notes{fid}", height=70)
         e1, e2 = st.columns(2)
@@ -278,12 +368,14 @@ with tab_report:
                     st.error("Could not read this image. Try a JPEG or PNG.")
                     st.stop()
                 lat, lng = ss.pin if ss.pin else CENTER
+                now = datetime.now()
                 rec = {
-                    "ref": ref, "lat": lat, "lng": lng, "pinned": ss.pin is not None,
+                    "ref": ref, "category": category, "lat": lat, "lng": lng, "pinned": ss.pin is not None,
                     "address": address.strip(), "when": when.strftime("%Y-%m-%d %H:%M"),
                     "severity": severity, "notes": notes.strip(), "contact": contact.strip(),
                     "photo": photo_path, "status": 0, "votes": 0,
-                    "created": datetime.now().isoformat(timespec="seconds"),
+                    "created": now.isoformat(timespec="seconds"),
+                    "target_days": est, "due": (now.date() + timedelta(days=est)).isoformat(),
                 }
                 reports.append(rec)
                 save_reports(reports)
@@ -294,47 +386,71 @@ with tab_report:
 # ---------- MAP ----------
 with tab_map:
     st.subheader("Reports map")
-    resolved = sum(1 for r in reports if r["status"] >= 4)
-    a, b, c = st.columns(3)
-    a.metric("Total", len(reports))
-    b.metric("Open", len(reports) - resolved)
-    c.metric("Resolved", resolved)
+    flt = st.selectbox("Show", ["All problems"] + list(CATEGORIES), key="mapfilter")
+    shown = [r for r in reports if flt == "All problems" or cat_of(r) == flt]
+
+    resolved = sum(1 for r in shown if r["status"] >= 4)
+    overdue = sum(1 for r in shown if is_overdue(r))
+    a, b, c, d = st.columns(4)
+    a.metric("Total", len(shown))
+    b.metric("Open", len(shown) - resolved)
+    c.metric("Overdue", overdue)
+    d.metric("Resolved", resolved)
 
     big = folium.Map(location=CENTER, zoom_start=12)
-    for r in reports:
+    for r in shown:
         folium.Marker(
             [r["lat"], r["lng"]],
-            popup=f"{r['ref']} · {STATUSES[r['status']]} · {r['severity']}",
+            popup=f"{r['ref']} · {cat_of(r)} · {STATUSES[r['status']]} · {deadline_text(r)}",
             icon=folium.Icon(color=status_color(r["status"])),
         ).add_to(big)
     st_folium(big, height=420, use_container_width=True, returned_objects=[], key="bigmap")
     st.caption("Red: submitted. Orange: in progress. Green: resolved.")
 
     st.markdown("**Recent reports**")
-    if not reports:
+    if not shown:
         st.write("No reports yet.")
-    for r in reversed(reports[-8:]):
+    for r in reversed(shown[-8:]):
         col_img, col_txt = st.columns([1, 4])
         if Path(r["photo"]).exists():
             col_img.image(r["photo"], width=70)
         col_txt.markdown(
-            f"**{r['ref']}** · {STATUSES[r['status']]}  \n"
-            f"{r['address'] or 'Pinned location'} · {r['severity']} · {r.get('votes', 0)} upvotes"
+            f"**{r['ref']}** · {cat_of(r)} · {STATUSES[r['status']]}  \n"
+            f"{r['address'] or 'Pinned location'} · {r['severity']} · {r.get('votes', 0)} upvotes  \n"
+            f"Target: {fmt_date(due_date(r))} ({deadline_text(r)})"
         )
 
 
 # ---------- TRACK ----------
 with tab_track:
     st.subheader("Track a complaint")
-    ref_in = st.text_input("Reference number", placeholder="RW-2026-123456").strip().upper()
+    ref_in = st.text_input("Reference number", placeholder="CC-2026-123456").strip().upper()
     if ref_in:
         rep = next((r for r in reports if r["ref"] == ref_in), None)
         if rep is None:
             st.error("No report found with that reference on this machine.")
         else:
             st.markdown(f"### {rep['ref']} · {STATUSES[rep['status']]}")
-            st.caption(f"{rep['address'] or 'Pinned location'} · {rep['severity']} · "
+            st.caption(f"{cat_of(rep)} · {rep['address'] or 'Pinned location'} · {rep['severity']} · "
                        f"{rep.get('votes', 0)} upvotes · observed {rep['when']}")
+
+            due = due_date(rep)
+            total = rep.get("target_days") or target_days(cat_of(rep), rep.get("severity", "Medium"))
+            if rep["status"] >= 4:
+                done = rep.get("resolved_on")
+                if done:
+                    late = (date.fromisoformat(done) - due).days
+                    st.success(f"Resolved on {fmt_date(date.fromisoformat(done))} "
+                               + ("(within the target time)." if late <= 0
+                                  else f"({late} day{'s' if late != 1 else ''} after the target date)."))
+                else:
+                    st.success("Resolved.")
+            elif is_overdue(rep):
+                st.error(f"Target date was {fmt_date(due)}. This report is {deadline_text(rep)}.")
+            else:
+                st.info(f"Target: within {human_days(total)}, by {fmt_date(due)} ({deadline_text(rep)}). "
+                        "This is a target, not a guarantee.")
+
             if Path(rep["photo"]).exists():
                 st.image(rep["photo"], width=240)
             st.progress((rep["status"] + 1) / len(STATUSES))
@@ -343,6 +459,8 @@ with tab_track:
             if rep["status"] < 4:
                 if st.button("Demo: advance status"):
                     rep["status"] += 1
+                    if rep["status"] >= 4:
+                        rep["resolved_on"] = date.today().isoformat()
                     save_reports(reports)
                     st.rerun()
                 st.caption("In a live system the municipality updates this. The button only simulates it.")
