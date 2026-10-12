@@ -5,7 +5,7 @@ Citizens can report potholes, garbage, broken streetlights, drainage problems an
 other civic issues. Each report gets a reference number and a target resolution time.
 
 Install:  pip install -r requirements.txt
-Run:      streamlit run Road_Watch.py  (or: streamlit run app.py)
+Run:      streamlit run app.py  (or: python -m streamlit run app.py / streamlit run Road_Watch.py)
 
 Reports are saved locally in reports.json and photos in the uploads/ folder.
 There is no real municipal backend: "sending" opens your email app with the
@@ -228,13 +228,26 @@ def fmt_date(d):
     return d.strftime("%d %b %Y")
 
 
+def format_when(val):
+    """Format stored timestamp string into clean 12-hour format (e.g., 12/10/2026, 06:08 PM)."""
+    if not val:
+        return "-"
+    if "AM" in val or "PM" in val:
+        return val
+    try:
+        dt = datetime.strptime(val, "%Y-%m-%d %H:%M")
+        return dt.strftime("%d/%m/%Y, %I:%M %p")
+    except Exception:
+        return val
+
+
 def mailto_link(r, to):
     body = (
         f"Complaint {r['ref']}\n"
         f"Problem type: {cat_of(r)}\n"
         f"Location: {r['address'] or '(see coordinates)'}\n"
         f"Coordinates: {r['lat']:.5f}, {r['lng']:.5f}\n"
-        f"Observed: {r['when']}\n"
+        f"Observed: {format_when(r.get('when', ''))}\n"
         f"Severity: {r['severity']}\n"
         f"Notes: {r['notes'] or '-'}\n"
         f"Reporter contact: {r['contact'] or '-'}\n\n"
@@ -394,9 +407,9 @@ with tab_report:
         d1, d2, d3 = st.columns([2, 2, 2])
         curr_dt = get_local_now()
         today = curr_dt.date()
-        when_date = d1.date_input("Date", value=today, max_value=today, key=f"date{fid}")
+        when_date = d1.date_input("Date", value=today, max_value=today, format="DD/MM/YYYY", key=f"date{fid}")
         when_time = d2.time_input("Time", value=curr_dt.time().replace(second=0, microsecond=0),
-                                  key=f"time{fid}")
+                                  format="12h", key=f"time{fid}")
         severity = d3.selectbox("Severity", ["Small", "Medium", "Dangerous"], index=1, key=f"sev{fid}")
 
         est = target_days(category, severity)
@@ -440,7 +453,7 @@ with tab_report:
                 now = get_local_now()
                 rec = {
                     "ref": ref, "category": category, "lat": lat, "lng": lng, "pinned": ss.pin is not None,
-                    "address": address.strip(), "when": when.strftime("%Y-%m-%d %H:%M"),
+                    "address": address.strip(), "when": when.strftime("%d/%m/%Y, %I:%M %p"),
                     "severity": severity, "notes": notes.strip(), "contact": contact.strip(),
                     "photo": photo_path, "status": 0, "votes": 0,
                     "created": now.isoformat(timespec="seconds"),
@@ -501,7 +514,7 @@ with tab_track:
         else:
             st.markdown(f"### {rep['ref']} · {STATUSES[rep['status']]}")
             st.caption(f"{cat_of(rep)} · {rep['address'] or 'Pinned location'} · {rep['severity']} · "
-                       f"{rep.get('votes', 0)} upvotes · observed {rep['when']}")
+                       f"{rep.get('votes', 0)} upvotes · observed {format_when(rep.get('when', ''))}")
 
             due = due_date(rep)
             total = rep.get("target_days") or target_days(cat_of(rep), rep.get("severity", "Medium"))
