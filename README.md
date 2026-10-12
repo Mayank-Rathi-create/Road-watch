@@ -104,6 +104,8 @@ Road-watch/
 ├── Road_Watch.py        # Core Streamlit application logic
 ├── requirements.txt     # Python dependencies
 ├── README.md            # Project documentation
+├── assets/              # Static media assets
+│   └── background.png   # AI detection road background wallpaper
 └── uploads/             # Directory for processed report photos (tracked via .gitkeep)
     └── .gitkeep
 ```

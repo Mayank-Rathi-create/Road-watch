@@ -15,12 +15,13 @@ IMPORTANT: the resolution times in CATEGORIES below are placeholder targets chos
 for this demo. Replace them with the official service-level timelines of your
 municipality before presenting them to users as real commitments.
 """
+import base64
 import json
 import math
 import os
 import random
 import urllib.parse
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
 
 # Load environment configuration (.env) if present
@@ -71,6 +72,58 @@ LEGACY_CATEGORY = "Pothole / road damage"  # reports saved before categories exi
 st.set_page_config(page_title="RoadWatch - Civic Connect", page_icon="🏙️", layout="centered")
 
 
+def get_local_now():
+    """
+    Returns the current local datetime, honoring APP_TIMEZONE or defaulting to Asia/Kolkata (IST).
+    Returns a naive datetime for full compatibility with Streamlit date & time pickers.
+    """
+    tz_str = os.getenv("APP_TIMEZONE", "Asia/Kolkata")
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo(tz_str)).replace(tzinfo=None)
+    except Exception:
+        pass
+
+    if tz_str in ("Asia/Kolkata", "Asia/Calcutta", "IST", "Asia/Colombo", ""):
+        ist = timezone(timedelta(hours=5, minutes=30))
+        return datetime.now(ist).replace(tzinfo=None)
+
+    return datetime.now()
+
+
+def set_page_background():
+    """Sets the provided rainy road AI detection image as the full-viewport app background."""
+    bg_path = BASE / "assets" / "background.png"
+    if not bg_path.exists():
+        return
+    try:
+        with open(bg_path, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode("utf-8")
+        st.markdown(
+            f"""
+            <style>
+            [data-testid="stAppViewContainer"], .stApp {{
+                background-image: linear-gradient(rgba(14, 17, 23, 0.82), rgba(14, 17, 23, 0.88)),
+                                  url("data:image/png;base64,{encoded}");
+                background-size: cover;
+                background-position: center center;
+                background-repeat: no-repeat;
+                background-attachment: fixed;
+            }}
+            [data-testid="stHeader"] {{
+                background-color: transparent !important;
+            }}
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        pass
+
+
+set_page_background()
+
+
 # ---------- storage ----------
 def load_reports():
     try:
@@ -85,8 +138,9 @@ def save_reports(reports):
 
 def new_ref(reports):
     used = {r["ref"] for r in reports}
+    year = get_local_now().year
     while True:
-        ref = f"CC-{date.today().year}-{random.randint(100000, 999999)}"
+        ref = f"CC-{year}-{random.randint(100000, 999999)}"
         if ref not in used:
             return ref
 
@@ -145,12 +199,12 @@ def due_date(rep):
     try:
         created = datetime.fromisoformat(rep["created"]).date()
     except (KeyError, ValueError):
-        created = date.today()
+        created = get_local_now().date()
     return created + timedelta(days=target_days(cat_of(rep), rep.get("severity", "Medium")))
 
 
 def days_left(rep):
-    return (due_date(rep) - date.today()).days
+    return (due_date(rep) - get_local_now().date()).days
 
 
 def is_overdue(rep):
@@ -338,9 +392,10 @@ with tab_report:
 
         st.markdown("**4. Date and time**")
         d1, d2, d3 = st.columns([2, 2, 2])
-        today = date.today()
+        curr_dt = get_local_now()
+        today = curr_dt.date()
         when_date = d1.date_input("Date", value=today, max_value=today, key=f"date{fid}")
-        when_time = d2.time_input("Time", value=datetime.now().time().replace(second=0, microsecond=0),
+        when_time = d2.time_input("Time", value=curr_dt.time().replace(second=0, microsecond=0),
                                   key=f"time{fid}")
         severity = d3.selectbox("Severity", ["Small", "Medium", "Dangerous"], index=1, key=f"sev{fid}")
 
@@ -366,7 +421,7 @@ with tab_report:
                 errors.append("A photo is required.")
             elif photo.size > MAX_MB * 1024 * 1024:
                 errors.append(f"Photo must be under {MAX_MB} MB.")
-            if when > datetime.now():
+            if when > get_local_now() + timedelta(minutes=2):
                 errors.append("Time cannot be in the future.")
             if authority and "@" not in authority:
                 errors.append("Authority email looks invalid.")
@@ -382,7 +437,7 @@ with tab_report:
                     st.error("Could not read this image. Try a JPEG or PNG.")
                     st.stop()
                 lat, lng = ss.pin if ss.pin else CENTER
-                now = datetime.now()
+                now = get_local_now()
                 rec = {
                     "ref": ref, "category": category, "lat": lat, "lng": lng, "pinned": ss.pin is not None,
                     "address": address.strip(), "when": when.strftime("%Y-%m-%d %H:%M"),
@@ -474,7 +529,7 @@ with tab_track:
                 if st.button("Demo: advance status"):
                     rep["status"] += 1
                     if rep["status"] >= 4:
-                        rep["resolved_on"] = date.today().isoformat()
+                        rep["resolved_on"] = get_local_now().date().isoformat()
                     save_reports(reports)
                     st.rerun()
                 st.caption("In a live system the municipality updates this. The button only simulates it.")
