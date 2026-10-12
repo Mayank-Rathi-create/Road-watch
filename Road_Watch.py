@@ -1,5 +1,5 @@
 """
-RoadWatch (Civic Connect) - report municipal problems (Streamlit)
+Civic-Connect - report municipal problems (Streamlit)
 
 Citizens can report potholes, garbage, broken streetlights, drainage problems and
 other civic issues. Each report gets a reference number and a target resolution time.
@@ -51,7 +51,7 @@ DEFAULT_LNG = float(os.getenv("DEFAULT_LONGITUDE", "77.5946"))
 CENTER = [DEFAULT_LAT, DEFAULT_LNG]
 DUP_RADIUS_M = int(os.getenv("DUP_RADIUS_M", "20"))
 MAX_MB = int(os.getenv("MAX_UPLOAD_SIZE_MB", "10"))
-NOMINATIM_UA = os.getenv("NOMINATIM_USER_AGENT", "roadwatch-demo")
+NOMINATIM_UA = os.getenv("NOMINATIM_USER_AGENT", "civic-connect-demo")
 DEFAULT_AUTH_EMAIL = os.getenv("DEFAULT_AUTHORITY_EMAIL", "")
 
 # Problem type -> target days to resolve a "Medium" severity report (EDIT THESE).
@@ -69,7 +69,7 @@ CATEGORIES = {
 SEV_FACTOR = {"Small": 1.5, "Medium": 1.0, "Dangerous": 0.5}
 LEGACY_CATEGORY = "Pothole / road damage"  # reports saved before categories existed
 
-st.set_page_config(page_title="RoadWatch - Civic Connect", page_icon="🏙️", layout="centered")
+st.set_page_config(page_title="Civic-Connect", page_icon="🏙️", layout="centered")
 
 
 def get_local_now():
@@ -297,7 +297,7 @@ ss.setdefault("addr_msg", None)
 
 reports = load_reports()
 
-st.title("RoadWatch · Civic **Connect**")
+st.title("Civic Connect")
 tab_report, tab_map, tab_track = st.tabs(["Report", "Map", "Track"])
 
 

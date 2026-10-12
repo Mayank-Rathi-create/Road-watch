@@ -1,8 +1,8 @@
-# RoadWatch: Civic Problem & Pothole Reporting App
+# Civic-Connect: Civic Problem & Pothole Reporting App
 
-RoadWatch is a web application built with Python and Streamlit that enables citizens to report civic problems (potholes, garbage, broken streetlights, water leakages, drainage blockages) in about a minute and track each complaint until resolution.
+Civic-Connect is a web application built with Python and Streamlit that enables citizens to report civic problems (potholes, garbage, broken streetlights, water leakages, drainage blockages) in about a minute and track each complaint until resolution.
 
-Many municipal reporting systems suffer from cumbersome forms, lack of duplicate detection, and opaque status updates. RoadWatch provides an intuitive, guided workflow: attach a photo, verify location and timestamp, and submit.
+Many municipal reporting systems suffer from cumbersome forms, lack of duplicate detection, and opaque status updates. Civic-Connect provides an intuitive, guided workflow: attach a photo, verify location and timestamp, and submit.
 
 > **Status:** Working prototype for civic demonstration and learning. Not yet linked directly to an automated municipal backend (see [Limitations](#limitations)).
 
@@ -85,7 +85,7 @@ pip install -r requirements.txt
 # Copy .env.example to .env and adjust if needed
 
 # 5. Launch the application
-streamlit run Road_Watch.py
+streamlit run Civic-connect.py
 # or
 streamlit run app.py
 ```

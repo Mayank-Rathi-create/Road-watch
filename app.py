@@ -1,5 +1,5 @@
 """
-RoadWatch Streamlit Entrypoint
+Civic-Connect Streamlit Entrypoint
 Allows running the application via:
     streamlit run app.py
 or
@@ -8,5 +8,5 @@ or
 import runpy
 from pathlib import Path
 
-target_script = Path(__file__).parent / "Road_Watch.py"
+target_script = Path(__file__).parent / "Civic_Connect.py"
 runpy.run_path(str(target_script), run_name="__main__")
