@@ -1,11 +1,11 @@
 """
-Civic Connect - report municipal problems (Streamlit)
+RoadWatch (Civic Connect) - report municipal problems (Streamlit)
 
 Citizens can report potholes, garbage, broken streetlights, drainage problems and
 other civic issues. Each report gets a reference number and a target resolution time.
 
-Install:  pip install streamlit streamlit-folium folium pillow geopy streamlit-geolocation
-Run:      streamlit run civic_connect_app.py
+Install:  pip install -r requirements.txt
+Run:      streamlit run Road_Watch.py  (or: streamlit run app.py)
 
 Reports are saved locally in reports.json and photos in the uploads/ folder.
 There is no real municipal backend: "sending" opens your email app with the
@@ -17,10 +17,18 @@ municipality before presenting them to users as real commitments.
 """
 import json
 import math
+import os
 import random
 import urllib.parse
 from datetime import datetime, date, timedelta
 from pathlib import Path
+
+# Load environment configuration (.env) if present
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 import folium
 import streamlit as st
@@ -35,9 +43,15 @@ UPLOADS = BASE / "uploads"
 UPLOADS.mkdir(exist_ok=True)
 
 STATUSES = ["Submitted", "Acknowledged", "Assigned", "In progress", "Resolved"]
-CENTER = [12.9716, 77.5946]  # Bengaluru
-DUP_RADIUS_M = 20
-MAX_MB = 10
+
+# Environment-configurable settings (with safe defaults)
+DEFAULT_LAT = float(os.getenv("DEFAULT_LATITUDE", "12.9716"))  # Bengaluru default
+DEFAULT_LNG = float(os.getenv("DEFAULT_LONGITUDE", "77.5946"))
+CENTER = [DEFAULT_LAT, DEFAULT_LNG]
+DUP_RADIUS_M = int(os.getenv("DUP_RADIUS_M", "20"))
+MAX_MB = int(os.getenv("MAX_UPLOAD_SIZE_MB", "10"))
+NOMINATIM_UA = os.getenv("NOMINATIM_USER_AGENT", "roadwatch-demo")
+DEFAULT_AUTH_EMAIL = os.getenv("DEFAULT_AUTHORITY_EMAIL", "")
 
 # Problem type -> target days to resolve a "Medium" severity report (EDIT THESE).
 CATEGORIES = {
@@ -54,7 +68,7 @@ CATEGORIES = {
 SEV_FACTOR = {"Small": 1.5, "Medium": 1.0, "Dangerous": 0.5}
 LEGACY_CATEGORY = "Pothole / road damage"  # reports saved before categories existed
 
-st.set_page_config(page_title="Civic connect", page_icon="🏙️", layout="centered")
+st.set_page_config(page_title="RoadWatch - Civic Connect", page_icon="🏙️", layout="centered")
 
 
 # ---------- storage ----------
@@ -182,7 +196,7 @@ def mailto_link(r, to):
 @st.cache_data(show_spinner=False, ttl=3600)
 def _reverse(lat, lng):
     # Exceptions are not cached by Streamlit, so a failed lookup is retried next time.
-    geo = Nominatim(user_agent="civic_connect-demo", timeout=8)
+    geo = Nominatim(user_agent=NOMINATIM_UA, timeout=8)
     loc = geo.reverse((round(lat, 5), round(lng, 5)), language="en")
     return loc.address if loc else ""
 
@@ -216,7 +230,7 @@ ss.setdefault("addr_msg", None)
 
 reports = load_reports()
 
-st.title("Civic **Connect**")
+st.title("RoadWatch · Civic **Connect**")
 tab_report, tab_map, tab_track = st.tabs(["Report", "Map", "Track"])
 
 
@@ -339,7 +353,7 @@ with tab_report:
 
         notes = st.text_area("Notes (optional)", key=f"notes{fid}", height=70)
         e1, e2 = st.columns(2)
-        authority = e1.text_input("Authority email", placeholder="municipal complaint email", key=f"auth{fid}")
+        authority = e1.text_input("Authority email", value=DEFAULT_AUTH_EMAIL, placeholder="municipal complaint email", key=f"auth{fid}")
         contact = e2.text_input("Your email or phone (optional)", key=f"cont{fid}")
 
         if st.button("Submit report", type="primary", use_container_width=True):

@@ -1,6 +1,7 @@
-streamlit
-streamlit-folium
-folium
-pillow
-geopy
-streamlit-geolocation
+streamlit>=1.28.0
+streamlit-folium>=0.16.0
+folium>=0.15.0
+pillow>=10.0.0
+geopy>=2.4.0
+streamlit-geolocation>=0.0.8
+python-dotenv>=1.0.0
