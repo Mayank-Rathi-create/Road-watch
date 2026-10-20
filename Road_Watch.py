@@ -578,7 +578,7 @@ with tab_report:
             key=f"auth{fid}",
             help="Auto-filled with the nearest municipality office email once location is provided. You can also edit it manually."
         )
-        contact = e2.text_input("Your email or phone (optional)", key=f"cont{fid}")
+        contact = e2.text_input("Your email or phone", key=f"cont{fid}")
 
         if st.button("Submit report", type="primary", use_container_width=True):
             when = datetime.combine(when_date, when_time)
