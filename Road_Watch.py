@@ -403,33 +403,29 @@ with tab_report:
                 ss.last_detected_pin = list(fix)
                 st.rerun()
 
-        ac1, ac2 = st.columns([3, 1])
-        address = ac1.text_input("Address or landmark", key=f"addr{fid}")
-        if ac2.button("🔍 Locate"):
-            if address.strip():
-                try:
-                    geo = Nominatim(user_agent=NOMINATIM_UA, timeout=8)
-                    loc = geo.geocode(address.strip(), language="en")
-                    if loc:
-                        ss.pin = [loc.latitude, loc.longitude]
-                        raw_details = getattr(loc, "raw", {}).get("address", {})
-                        auth = find_nearest_municipality(loc.latitude, loc.longitude, raw_details)
-                        ss.nearest_auth = auth
-                        ss[f"auth{fid}"] = auth["email"]
-                        ss.last_detected_pin = [loc.latitude, loc.longitude]
-                        ss.addr_msg = ("ok", loc.address)
-                        st.rerun()
-                    else:
-                        ss.addr_msg = ("warn", f"Could not find coordinates for '{address}'. Please pick on the map.")
-                except Exception:
-                    ss.addr_msg = ("warn", "Address lookup failed. Please drop a pin on the map.")
+        address = st.text_input("Address or landmark", key=f"addr{fid}")
+        if address.strip() and ss.pin is None and ss.get("last_typed_addr") != address.strip():
+            ss.last_typed_addr = address.strip()
+            try:
+                geo = Nominatim(user_agent=NOMINATIM_UA, timeout=8)
+                loc = geo.geocode(address.strip(), language="en")
+                if loc:
+                    ss.pin = [loc.latitude, loc.longitude]
+                    raw_details = getattr(loc, "raw", {}).get("address", {})
+                    auth = find_nearest_municipality(loc.latitude, loc.longitude, raw_details)
+                    ss.nearest_auth = auth
+                    ss[f"auth{fid}"] = auth["email"]
+                    ss.last_detected_pin = [loc.latitude, loc.longitude]
+                    st.rerun()
+            except Exception:
+                pass
 
         if ss.addr_msg:
             kind, text = ss.addr_msg
             (st.success if kind == "ok" else st.warning)(
                 f"Detected address: {text}" if kind == "ok" else text)
         if ss.pin:
-            st.button("Fill address & municipality from the pin on the map", on_click=fill_address_from_pin)
+            st.button("Fill address from the pin on the map", on_click=fill_address_from_pin)
         st.caption("Or click the map to drop a pin, or enter coordinates below.")
 
         m = folium.Map(location=ss.pin or CENTER, zoom_start=13 if not ss.pin else 16)
@@ -505,14 +501,17 @@ with tab_report:
         notes = st.text_area("Notes (optional)", key=f"notes{fid}", height=70)
 
         # 5. Municipal Authority & Contact
-        curr_coords = ss.pin or CENTER
-        if ss.nearest_auth is None:
-            raw_details = get_address_details(*curr_coords)
-            ss.nearest_auth = find_nearest_municipality(curr_coords[0], curr_coords[1], raw_details)
-            if f"auth{fid}" not in ss or not ss[f"auth{fid}"]:
-                ss[f"auth{fid}"] = ss.nearest_auth["email"] if not DEFAULT_AUTH_EMAIL else DEFAULT_AUTH_EMAIL
+        has_location = ss.pin is not None
+        curr_auth = None
 
-        curr_auth = ss.nearest_auth
+        if has_location:
+            if ss.nearest_auth is None or ss.get("last_detected_pin") != ss.pin:
+                raw_details = get_address_details(*ss.pin)
+                ss.nearest_auth = find_nearest_municipality(ss.pin[0], ss.pin[1], raw_details)
+                ss[f"auth{fid}"] = ss.nearest_auth["email"]
+                ss.last_detected_pin = list(ss.pin)
+            curr_auth = ss.nearest_auth
+
         st.markdown("**5. Municipal Authority & Contact**")
         if curr_auth:
             dist_km = curr_auth.get("distance_km")
@@ -538,44 +537,46 @@ with tab_report:
                 unsafe_allow_html=True,
             )
 
-        col_redetect, col_search = st.columns([1, 1])
-        if col_redetect.button("🔄 Re-detect nearest office", key=f"redetect_{fid}", use_container_width=True):
-            tgt_coords = ss.pin or CENTER
-            raw = get_address_details(*tgt_coords)
-            auth = find_nearest_municipality(tgt_coords[0], tgt_coords[1], raw)
-            ss.nearest_auth = auth
-            ss[f"auth{fid}"] = auth["email"]
-            st.rerun()
+            col_redetect, col_search = st.columns([1, 1])
+            if col_redetect.button("🔄 Re-detect nearest office", key=f"redetect_{fid}", use_container_width=True):
+                raw = get_address_details(*ss.pin)
+                auth = find_nearest_municipality(ss.pin[0], ss.pin[1], raw)
+                ss.nearest_auth = auth
+                ss[f"auth{fid}"] = auth["email"]
+                ss.last_detected_pin = list(ss.pin)
+                st.rerun()
 
-        with col_search.expander("🏛️ Choose other civic body", expanded=False):
-            st.caption("Select from major municipal authorities across India:")
-            search_txt = st.text_input("Filter by city / authority", key=f"auth_search_{fid}")
-            matched_auths = search_authorities(search_txt, limit=6)
-            for m_auth in matched_auths:
-                btn_c1, btn_c2 = st.columns([3, 1])
-                btn_c1.markdown(f"**{m_auth['name']}**  \n`{m_auth['email']}`")
-                if btn_c2.button("Select", key=f"btn_sel_{m_auth['short']}_{fid}"):
-                    ss.nearest_auth = m_auth
-                    ss[f"auth{fid}"] = m_auth["email"]
-                    st.rerun()
-
-        if curr_auth and curr_auth.get("alt_emails"):
-            with st.expander("Show alternative department emails for this authority", expanded=False):
-                st.caption(f"Other official emails for {curr_auth['name']}:")
-                for alt_e in curr_auth["alt_emails"]:
-                    clean_alt = alt_e.split(" ")[0]
-                    alt_c1, alt_c2 = st.columns([3, 1])
-                    alt_c1.code(alt_e)
-                    if alt_c2.button("Use this", key=f"use_alt_{clean_alt}_{fid}"):
-                        ss[f"auth{fid}"] = clean_alt
+            with col_search.expander("🏛️ Choose other civic body", expanded=False):
+                st.caption("Select from major municipal authorities across India:")
+                search_txt = st.text_input("Filter by city / authority", key=f"auth_search_{fid}")
+                matched_auths = search_authorities(search_txt, limit=6)
+                for m_auth in matched_auths:
+                    btn_c1, btn_c2 = st.columns([3, 1])
+                    btn_c1.markdown(f"**{m_auth['name']}**  \n`{m_auth['email']}`")
+                    if btn_c2.button("Select", key=f"btn_sel_{m_auth['short']}_{fid}"):
+                        ss.nearest_auth = m_auth
+                        ss[f"auth{fid}"] = m_auth["email"]
                         st.rerun()
+
+            if curr_auth.get("alt_emails"):
+                with st.expander("Show alternative department emails for this authority", expanded=False):
+                    st.caption(f"Other official emails for {curr_auth['name']}:")
+                    for alt_e in curr_auth["alt_emails"]:
+                        clean_alt = alt_e.split(" ")[0]
+                        alt_c1, alt_c2 = st.columns([3, 1])
+                        alt_c1.code(alt_e)
+                        if alt_c2.button("Use this", key=f"use_alt_{clean_alt}_{fid}"):
+                            ss[f"auth{fid}"] = clean_alt
+                            st.rerun()
+        else:
+            st.info("📍 Select or enter your location in step 3 above (via GPS, map pin, or address) to automatically determine the nearest municipal office email.")
 
         e1, e2 = st.columns(2)
         authority = e1.text_input(
             "Authority email",
-            placeholder="municipal complaint email",
+            placeholder="Auto-detected once location is selected" if not has_location else "municipal complaint email",
             key=f"auth{fid}",
-            help="Auto-filled with the nearest municipality office email. You can also edit it manually."
+            help="Auto-filled with the nearest municipality office email once location is provided. You can also edit it manually."
         )
         contact = e2.text_input("Your email or phone (optional)", key=f"cont{fid}")
 
