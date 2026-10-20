@@ -38,6 +38,13 @@ from PIL import Image, ImageOps
 from streamlit_folium import st_folium
 from streamlit_geolocation import streamlit_geolocation
 
+from municipal_directory import (
+    find_nearest_municipality,
+    search_authorities,
+    MUNICIPAL_AUTHORITIES,
+)
+
+
 BASE = Path(__file__).parent
 DATA = BASE / "reports.json"
 UPLOADS = BASE / "uploads"
@@ -242,49 +249,73 @@ def format_when(val):
 
 
 def mailto_link(r, to):
+    auth_name = r.get("authority_name") or "Municipal Authority"
     body = (
-        f"Complaint {r['ref']}\n"
-        f"Problem type: {cat_of(r)}\n"
-        f"Location: {r['address'] or '(see coordinates)'}\n"
-        f"Coordinates: {r['lat']:.5f}, {r['lng']:.5f}\n"
-        f"Observed: {format_when(r.get('when', ''))}\n"
-        f"Severity: {r['severity']}\n"
-        f"Notes: {r['notes'] or '-'}\n"
-        f"Reporter contact: {r['contact'] or '-'}\n\n"
-        "Please attach the photo before sending."
+        f"To: The Grievance Officer / Municipal Commissioner,\n"
+        f"{auth_name}\n\n"
+        f"Subject: Civic Complaint regarding {cat_of(r)} (Ref: {r['ref']})\n\n"
+        f"Respected Sir/Madam,\n\n"
+        f"I wish to lodge a formal civic complaint regarding the following issue in your jurisdiction:\n\n"
+        f"• Complaint Reference: {r['ref']}\n"
+        f"• Problem Category: {cat_of(r)}\n"
+        f"• Severity: {r.get('severity', 'Medium')}\n"
+        f"• Location / Address: {r.get('address') or '(Coordinates provided below)'}\n"
+        f"• GPS Coordinates: {r['lat']:.5f}, {r['lng']:.5f}\n"
+        f"• Date & Time Observed: {format_when(r.get('when', ''))}\n"
+        f"• Reporter Contact: {r.get('contact') or 'Anonymous / Not provided'}\n\n"
+        f"Additional Description / Notes:\n"
+        f"{r.get('notes') or 'None provided.'}\n\n"
+        f"Expected Resolution SLA: within {human_days(r.get('target_days', 7))}\n\n"
+        f"Please inspect and resolve this problem at the earliest.\n\n"
+        f"[Note: Please attach the complaint photo before sending this email.]"
     )
+    subject = f"[{r['ref']}] {cat_of(r)} - Complaint to {auth_name}"
     return (
         f"mailto:{urllib.parse.quote(to)}"
-        f"?subject={urllib.parse.quote(cat_of(r) + ' - complaint ' + r['ref'])}"
+        f"?subject={urllib.parse.quote(subject)}"
         f"&body={urllib.parse.quote(body)}"
     )
 
 
 @st.cache_data(show_spinner=False, ttl=3600)
-def _reverse(lat, lng):
+def _reverse_full(lat, lng):
     # Exceptions are not cached by Streamlit, so a failed lookup is retried next time.
-    geo = Nominatim(user_agent=NOMINATIM_UA, timeout=8)
-    loc = geo.reverse((round(lat, 5), round(lng, 5)), language="en")
-    return loc.address if loc else ""
+    try:
+        geo = Nominatim(user_agent=NOMINATIM_UA, timeout=8)
+        loc = geo.reverse((round(lat, 5), round(lng, 5)), language="en")
+        if loc:
+            raw_addr = getattr(loc, "raw", {}).get("address", {})
+            return loc.address or "", raw_addr
+    except Exception:
+        pass
+    return "", {}
 
 
 def reverse_geocode(lat, lng):
     """Coordinates -> street address via OpenStreetMap Nominatim (about 1 request/second max)."""
-    try:
-        return _reverse(lat, lng) or None
-    except Exception:
-        return None
+    addr, _ = _reverse_full(lat, lng)
+    return addr or None
+
+
+def get_address_details(lat, lng):
+    """Coordinates -> raw address dictionary for municipal identification."""
+    _, raw = _reverse_full(lat, lng)
+    return raw
 
 
 def fill_address_from_pin():
-    """Button callback: put the address of the current pin into the address box."""
+    """Button callback: put the address and nearest municipality of current pin into the form."""
     if ss.pin:
-        addr = reverse_geocode(*ss.pin)
+        addr, raw_details = _reverse_full(*ss.pin)
         if addr:
             ss[f"addr{ss.form_id}"] = addr
             ss.addr_msg = ("ok", addr)
         else:
             ss.addr_msg = ("warn", "Could not look up an address for this pin. Please type it in.")
+        auth = find_nearest_municipality(ss.pin[0], ss.pin[1], raw_details)
+        ss.nearest_auth = auth
+        ss[f"auth{ss.form_id}"] = auth["email"]
+        ss.last_detected_pin = list(ss.pin)
 
 
 # ---------- session state ----------
@@ -294,6 +325,8 @@ ss.setdefault("form_id", 0)
 ss.setdefault("last", None)  # last submitted (report, authority email)
 ss.setdefault("gps_last", None)  # last GPS fix already applied
 ss.setdefault("addr_msg", None)
+ss.setdefault("nearest_auth", None)
+ss.setdefault("last_detected_pin", None)
 
 reports = load_reports()
 
@@ -312,14 +345,26 @@ with tab_report:
             "not a guarantee."
         )
         if to:
-            st.markdown(f"[Email complaint to authority]({mailto_link(r, to)})")
-            st.caption("Your email app opens with the details filled in. Attach the photo before sending.")
+            auth_disp = r.get("authority_name") or "Municipal Authority"
+            st.markdown(
+                f"""
+                <div style="background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 8px; padding: 12px 16px; margin: 12px 0;">
+                    <div style="font-weight: 600; color: #6ee7b7; font-size: 0.95rem;">🏛️ Targeted Authority: {auth_disp}</div>
+                    <div style="color: #cbd5e1; font-size: 0.85rem; margin-top: 4px;">Destination email: <code>{to}</code></div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.markdown(f"[✉️ Email complaint to {auth_disp}]({mailto_link(r, to)})")
+            st.caption("Your email app opens with the formal complaint pre-filled for this municipal office. Attach the photo before sending.")
         else:
             st.info("No authority email was entered, so nothing has been sent.")
         if st.button("Report another problem."):
             ss.last = None
             ss.pin = None
             ss.addr_msg = None
+            ss.nearest_auth = None
+            ss.last_detected_pin = None
             ss.form_id += 1
             st.rerun()
     else:
@@ -344,7 +389,7 @@ with tab_report:
             if ss.gps_last != fix:  # new GPS reading: apply it once
                 ss.gps_last = fix
                 ss.pin = [g_lat, g_lng]
-                addr = reverse_geocode(g_lat, g_lng)
+                addr, raw_details = _reverse_full(g_lat, g_lng)
                 if addr:
                     ss[f"addr{fid}"] = addr
                     acc = gps.get("accuracy")
@@ -352,15 +397,39 @@ with tab_report:
                 else:
                     ss.addr_msg = ("warn", f"Location found ({g_lat:.5f}, {g_lng:.5f}) but no street address could be "
                                            "looked up. Please type it in.")
+                auth = find_nearest_municipality(g_lat, g_lng, raw_details)
+                ss.nearest_auth = auth
+                ss[f"auth{fid}"] = auth["email"]
+                ss.last_detected_pin = list(fix)
                 st.rerun()
 
-        address = st.text_input("Address or landmark", key=f"addr{fid}")
+        ac1, ac2 = st.columns([3, 1])
+        address = ac1.text_input("Address or landmark", key=f"addr{fid}")
+        if ac2.button("🔍 Locate"):
+            if address.strip():
+                try:
+                    geo = Nominatim(user_agent=NOMINATIM_UA, timeout=8)
+                    loc = geo.geocode(address.strip(), language="en")
+                    if loc:
+                        ss.pin = [loc.latitude, loc.longitude]
+                        raw_details = getattr(loc, "raw", {}).get("address", {})
+                        auth = find_nearest_municipality(loc.latitude, loc.longitude, raw_details)
+                        ss.nearest_auth = auth
+                        ss[f"auth{fid}"] = auth["email"]
+                        ss.last_detected_pin = [loc.latitude, loc.longitude]
+                        ss.addr_msg = ("ok", loc.address)
+                        st.rerun()
+                    else:
+                        ss.addr_msg = ("warn", f"Could not find coordinates for '{address}'. Please pick on the map.")
+                except Exception:
+                    ss.addr_msg = ("warn", "Address lookup failed. Please drop a pin on the map.")
+
         if ss.addr_msg:
             kind, text = ss.addr_msg
             (st.success if kind == "ok" else st.warning)(
                 f"Detected address: {text}" if kind == "ok" else text)
         if ss.pin:
-            st.button("Fill address from the pin on the map", on_click=fill_address_from_pin)
+            st.button("Fill address & municipality from the pin on the map", on_click=fill_address_from_pin)
         st.caption("Or click the map to drop a pin, or enter coordinates below.")
 
         m = folium.Map(location=ss.pin or CENTER, zoom_start=13 if not ss.pin else 16)
@@ -377,6 +446,13 @@ with tab_report:
             new_pin = [click["lat"], click["lng"]]
             if ss.pin != new_pin:
                 ss.pin = new_pin
+                addr, raw_details = _reverse_full(click["lat"], click["lng"])
+                if addr:
+                    ss[f"addr{fid}"] = addr
+                auth = find_nearest_municipality(click["lat"], click["lng"], raw_details)
+                ss.nearest_auth = auth
+                ss[f"auth{fid}"] = auth["email"]
+                ss.last_detected_pin = list(new_pin)
                 st.rerun()
 
         c1, c2 = st.columns(2)
@@ -386,6 +462,13 @@ with tab_report:
                                  format="%.5f", key=f"lng{fid}_{ss.pin}")
         if (lat_in or lng_in) and ss.pin != [lat_in, lng_in] and -90 <= lat_in <= 90 and -180 <= lng_in <= 180:
             ss.pin = [lat_in, lng_in]
+            addr, raw_details = _reverse_full(lat_in, lng_in)
+            if addr:
+                ss[f"addr{fid}"] = addr
+            auth = find_nearest_municipality(lat_in, lng_in, raw_details)
+            ss.nearest_auth = auth
+            ss[f"auth{fid}"] = auth["email"]
+            ss.last_detected_pin = [lat_in, lng_in]
             st.rerun()
 
         # duplicate check (same problem type, within DUP_RADIUS_M)
@@ -420,8 +503,80 @@ with tab_report:
         )
 
         notes = st.text_area("Notes (optional)", key=f"notes{fid}", height=70)
+
+        # 5. Municipal Authority & Contact
+        curr_coords = ss.pin or CENTER
+        if ss.nearest_auth is None:
+            raw_details = get_address_details(*curr_coords)
+            ss.nearest_auth = find_nearest_municipality(curr_coords[0], curr_coords[1], raw_details)
+            if f"auth{fid}" not in ss or not ss[f"auth{fid}"]:
+                ss[f"auth{fid}"] = ss.nearest_auth["email"] if not DEFAULT_AUTH_EMAIL else DEFAULT_AUTH_EMAIL
+
+        curr_auth = ss.nearest_auth
+        st.markdown("**5. Municipal Authority & Contact**")
+        if curr_auth:
+            dist_km = curr_auth.get("distance_km")
+            dist_badge = f"~{dist_km} km away" if dist_km is not None else "detected"
+            st.markdown(
+                f"""
+                <div style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(59, 130, 246, 0.4); border-radius: 8px; padding: 11px 15px; margin-bottom: 10px;">
+                    <div style="display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap;">
+                        <div>
+                            <span style="color: #60a5fa; font-weight: 600; font-size: 0.92rem;">🏛️ Nearest Municipal Office:</span>
+                            <span style="color: #f8fafc; font-weight: 600; font-size: 0.95rem; margin-left: 6px;">{curr_auth['name']}</span>
+                            <span style="background: rgba(59, 130, 246, 0.25); color: #bfdbfe; font-size: 0.75rem; padding: 2px 7px; border-radius: 10px; margin-left: 6px;">{dist_badge}</span>
+                        </div>
+                        <div style="color: #cbd5e1; font-size: 0.8rem; margin-top: 3px;">
+                            📞 Helpline: <b>{curr_auth.get('helpline', '1533')}</b>
+                        </div>
+                    </div>
+                    <div style="font-size: 0.8rem; color: #94a3b8; margin-top: 5px;">
+                        Official complaint inbox: <span style="color: #38bdf8; font-family: monospace; background: rgba(0,0,0,0.3); padding: 1px 5px; border-radius: 4px;">{curr_auth['email']}</span>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        col_redetect, col_search = st.columns([1, 1])
+        if col_redetect.button("🔄 Re-detect nearest office", key=f"redetect_{fid}", use_container_width=True):
+            tgt_coords = ss.pin or CENTER
+            raw = get_address_details(*tgt_coords)
+            auth = find_nearest_municipality(tgt_coords[0], tgt_coords[1], raw)
+            ss.nearest_auth = auth
+            ss[f"auth{fid}"] = auth["email"]
+            st.rerun()
+
+        with col_search.expander("🏛️ Choose other civic body", expanded=False):
+            st.caption("Select from major municipal authorities across India:")
+            search_txt = st.text_input("Filter by city / authority", key=f"auth_search_{fid}")
+            matched_auths = search_authorities(search_txt, limit=6)
+            for m_auth in matched_auths:
+                btn_c1, btn_c2 = st.columns([3, 1])
+                btn_c1.markdown(f"**{m_auth['name']}**  \n`{m_auth['email']}`")
+                if btn_c2.button("Select", key=f"btn_sel_{m_auth['short']}_{fid}"):
+                    ss.nearest_auth = m_auth
+                    ss[f"auth{fid}"] = m_auth["email"]
+                    st.rerun()
+
+        if curr_auth and curr_auth.get("alt_emails"):
+            with st.expander("Show alternative department emails for this authority", expanded=False):
+                st.caption(f"Other official emails for {curr_auth['name']}:")
+                for alt_e in curr_auth["alt_emails"]:
+                    clean_alt = alt_e.split(" ")[0]
+                    alt_c1, alt_c2 = st.columns([3, 1])
+                    alt_c1.code(alt_e)
+                    if alt_c2.button("Use this", key=f"use_alt_{clean_alt}_{fid}"):
+                        ss[f"auth{fid}"] = clean_alt
+                        st.rerun()
+
         e1, e2 = st.columns(2)
-        authority = e1.text_input("Authority email", value=DEFAULT_AUTH_EMAIL, placeholder="municipal complaint email", key=f"auth{fid}")
+        authority = e1.text_input(
+            "Authority email",
+            placeholder="municipal complaint email",
+            key=f"auth{fid}",
+            help="Auto-filled with the nearest municipality office email. You can also edit it manually."
+        )
         contact = e2.text_input("Your email or phone (optional)", key=f"cont{fid}")
 
         if st.button("Submit report", type="primary", use_container_width=True):
@@ -451,10 +606,13 @@ with tab_report:
                     st.stop()
                 lat, lng = ss.pin if ss.pin else CENTER
                 now = get_local_now()
+                auth_name = curr_auth.get("name") if curr_auth else "Municipal Authority"
                 rec = {
                     "ref": ref, "category": category, "lat": lat, "lng": lng, "pinned": ss.pin is not None,
                     "address": address.strip(), "when": when.strftime("%d/%m/%Y, %I:%M %p"),
                     "severity": severity, "notes": notes.strip(), "contact": contact.strip(),
+                    "authority_name": auth_name,
+                    "authority_email": authority.strip(),
                     "photo": photo_path, "status": 0, "votes": 0,
                     "created": now.isoformat(timespec="seconds"),
                     "target_days": est, "due": (now.date() + timedelta(days=est)).isoformat(),
@@ -513,8 +671,10 @@ with tab_track:
             st.error("No report found with that reference on this machine.")
         else:
             st.markdown(f"### {rep['ref']} · {STATUSES[rep['status']]}")
+            auth_info = f" · Authority: **{rep['authority_name']}** ({rep.get('authority_email', '')})" if rep.get("authority_name") else ""
             st.caption(f"{cat_of(rep)} · {rep['address'] or 'Pinned location'} · {rep['severity']} · "
-                       f"{rep.get('votes', 0)} upvotes · observed {format_when(rep.get('when', ''))}")
+                       f"{rep.get('votes', 0)} upvotes{auth_info} · observed {format_when(rep.get('when', ''))}")
+
 
             due = due_date(rep)
             total = rep.get("target_days") or target_days(cat_of(rep), rep.get("severity", "Medium"))
